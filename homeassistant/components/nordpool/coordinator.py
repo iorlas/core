@@ -31,6 +31,11 @@ if TYPE_CHECKING:
 NORDPOOL_TIMEZONE = get_time_zone("Europe/Oslo")
 
 
+def get_nordpool_current_time() -> datetime:
+    """Return the Nord Pool current time."""
+    return dt_util.utcnow().astimezone(NORDPOOL_TIMEZONE)
+
+
 class NordPoolDataUpdateCoordinator(DataUpdateCoordinator[DeliveryPeriodsData]):
     """A Nord Pool Data Update Coordinator."""
 
@@ -51,30 +56,24 @@ class NordPoolDataUpdateCoordinator(DataUpdateCoordinator[DeliveryPeriodsData]):
     def get_next_data_interval(self, now: datetime) -> datetime:
         """Compute next time an update should occur."""
         if self.has_current_day_data and self.has_tomorrow_data:
-            _date = dt_util.now().date() + timedelta(days=1)
-            _time = time(hour=0, minute=0, second=0)
-            next_data_run = datetime.combine(_date, _time, NORDPOOL_TIMEZONE)
+            _date = get_nordpool_current_time().date() + timedelta(days=1)
+            _time = time()
+            next_run = datetime.combine(_date, _time, NORDPOOL_TIMEZONE)
         else:
-            next_data_run = dt_util.utcnow() + timedelta(hours=1)
-        next_run = datetime(
-            next_data_run.year,
-            next_data_run.month,
-            next_data_run.day,
-            next_data_run.hour,
-            tzinfo=dt_util.UTC,
-        )
-        LOGGER.debug("Next data update at %s", next_run)
-        return next_run
+            next_data_run = get_nordpool_current_time() + timedelta(hours=1)
+            next_run = next_data_run.replace(minute=0, second=0, microsecond=0)
+        LOGGER.debug("Next data update at %s", next_run.astimezone(NORDPOOL_TIMEZONE))
+        return next_run.astimezone(dt_util.UTC)
 
     def get_next_15_interval(self, now: datetime) -> datetime:
         """Compute next time we need to notify listeners."""
         next_run = dt_util.utcnow() + timedelta(minutes=15)
         next_minute = next_run.minute // 15 * 15
-        next_run = next_run.replace(
-            minute=next_minute, second=0, microsecond=0, tzinfo=dt_util.UTC
-        )
+        next_run = next_run.replace(minute=next_minute, second=0, microsecond=0)
 
-        LOGGER.debug("Next listener update at %s", next_run)
+        LOGGER.debug(
+            "Next listener update at %s", next_run.astimezone(NORDPOOL_TIMEZONE)
+        )
         return next_run
 
     @override
@@ -93,14 +92,14 @@ class NordPoolDataUpdateCoordinator(DataUpdateCoordinator[DeliveryPeriodsData]):
         self.listener_unsub = async_track_point_in_utc_time(
             self.hass,
             self.update_listeners,
-            self.get_next_15_interval(dt_util.utcnow()),
+            self.get_next_15_interval(now),
         )
         self.async_update_listeners()
 
     async def fetch_data(self, now: datetime, initial: bool = False) -> None:
         """Fetch data from Nord Pool."""
         self.data_unsub = async_track_point_in_utc_time(
-            self.hass, self.fetch_data, self.get_next_data_interval(dt_util.utcnow())
+            self.hass, self.fetch_data, self.get_next_data_interval(now)
         )
         if self.config_entry.pref_disable_polling and not initial:
             return
@@ -114,14 +113,14 @@ class NordPoolDataUpdateCoordinator(DataUpdateCoordinator[DeliveryPeriodsData]):
             self.data_unsub = async_track_point_in_utc_time(
                 self.hass,
                 self.fetch_data,
-                self.get_next_data_interval(dt_util.utcnow()),
+                self.get_next_data_interval(now),
             )
 
     async def handle_data(self, initial: bool = False) -> DeliveryPeriodsData:
         """Fetch data from Nord Pool."""
         data = await self.api_call()
         if data and data.entries:
-            current_day = dt_util.now().date()
+            current_day = get_nordpool_current_time().date()
             if current_day in data.entries:
                 LOGGER.debug("Data for current day found")
                 return data
@@ -143,9 +142,9 @@ class NordPoolDataUpdateCoordinator(DataUpdateCoordinator[DeliveryPeriodsData]):
         try:
             data = await self.client.async_get_delivery_periods(
                 [
-                    dt_util.now() - timedelta(days=1),
-                    dt_util.now(),
-                    dt_util.now() + timedelta(days=1),
+                    get_nordpool_current_time() - timedelta(days=1),
+                    get_nordpool_current_time(),
+                    get_nordpool_current_time() + timedelta(days=1),
                 ],
                 Currency(self.config_entry.data[CONF_CURRENCY]),
                 self.config_entry.data[CONF_AREAS],
@@ -178,18 +177,18 @@ class NordPoolDataUpdateCoordinator(DataUpdateCoordinator[DeliveryPeriodsData]):
 
     def get_data_current_day(self) -> DeliveryPeriodData:
         """Return the current day data."""
-        current_day = dt_util.now().date()
+        current_day = get_nordpool_current_time().date()
         return self.data.entries[current_day]
 
     def get_data_tomorrow(self) -> DeliveryPeriodData | None:
         """Return tomorrow's day data if available."""
-        tomorrow = dt_util.now().date() + timedelta(days=1)
+        tomorrow = get_nordpool_current_time().date() + timedelta(days=1)
         return self.data.entries.get(tomorrow)
 
     @property
     def has_current_day_data(self) -> bool:
         """Return True if current day's data is available."""
-        current_day = dt_util.now().date()
+        current_day = get_nordpool_current_time().date()
         if self.data and self.data.entries:
             return current_day in self.data.entries
         return False
@@ -197,7 +196,7 @@ class NordPoolDataUpdateCoordinator(DataUpdateCoordinator[DeliveryPeriodsData]):
     @property
     def has_tomorrow_data(self) -> bool:
         """Return True if tomorrow's data is available."""
-        tomorrow = dt_util.now().date() + timedelta(days=1)
+        tomorrow = get_nordpool_current_time().date() + timedelta(days=1)
         if self.data and self.data.entries:
             return tomorrow in self.data.entries
         return False
